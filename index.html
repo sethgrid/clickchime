@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Circle Collision Game</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #111;
+      cursor: crosshair;
+    }
+    canvas {
+      display: block;
+    }
+    .control-group {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: white;
+      border-radius: 6px;
+      padding: 10px;
+      z-index: 10;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .control-row {
+      margin-bottom: 10px;
+    }
+    label {
+      display: inline-block;
+      width: 100px;
+    }
+    input[type="range"], input[type="checkbox"] {
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+<div class="control-group">
+  <div class="control-row">
+    <button id="clearBtn">Clear All</button>
+  </div>
+  <div class="control-row">
+    <label for="toneSlider">Tone</label>
+    <input id="toneSlider" type="range" min="0" max="100" value="50" />
+  </div>
+  <div class="control-row">
+    <label for="physicsToggle">Physics</label>
+    <input id="physicsToggle" type="checkbox" />
+  </div>
+  <div class="control-row">
+    <label for="gravitySlider">Gravity</label>
+    <input id="gravitySlider" type="range" min="0" max="2" step="0.01" value="0.1" />
+  </div>
+  <div class="control-row">
+    <label for="springSlider">Springiness</label>
+    <input id="springSlider" type="range" min="0" max="1" step="0.01" value="0.5" />
+  </div>
+  <div class="control-row">
+    <label for="fragilityToggle">Fragility</label>
+    <input id="fragilityToggle" type="checkbox" />
+  </div>
+  <div class="control-row">
+    <label for="fragilitySlider">Max Collisions</label>
+    <input id="fragilitySlider" type="range" min="1" max="500" step="1" value="100" />
+  </div>
+</div>
+<canvas></canvas>
+<script>
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+const circles = [];
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+const toneSlider = document.getElementById('toneSlider');
+const gravitySlider = document.getElementById('gravitySlider');
+const springSlider = document.getElementById('springSlider');
+const physicsToggle = document.getElementById('physicsToggle');
+const fragilitySlider = document.getElementById('fragilitySlider');
+
+class Circle {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.radius = 1;
+    this.growing = true;
+    this.speed = 0.5;
+    this.hue = Math.random() * 360;
+    this.lastCollision = 0;
+    this.vx = 0;
+    this.vy = 0;
+    this.collisions = 0;
+    this.alpha = 1;
+    this.dead = false;
+  }
+
+  update() {
+    if (this.dead) {
+      this.alpha -= 0.01;
+      if (this.alpha <= 0) this.alpha = 0;
+      return;
+    }
+
+    if (physicsToggle.checked) {
+      const gravity = parseFloat(gravitySlider.value);
+      this.vy += gravity;
+      this.x += this.vx;
+      this.y += this.vy;
+
+      const bottom = canvas.height - this.radius;
+      if (this.y > bottom) {
+        this.y = bottom;
+        this.vy = 0;
+      }
+
+      if (this.x - this.radius < 0 || this.x + this.radius > canvas.width) this.vx *= -1;
+      if (this.y - this.radius < 0 || this.y + this.radius > canvas.height) this.vy *= -1;
+    }
+
+    if (this.growing) {
+      this.radius += this.speed;
+    } else {
+      this.radius -= this.speed;
+      if (this.radius <= 1) {
+        this.radius = 1;
+        this.growing = true;
+      }
+    }
+    this.hue = (this.hue + 1) % 360;
+  }
+
+  draw() {
+    if (this.alpha <= 0) return;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${this.hue}, 100%, 60%, ${this.alpha})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
+
+function playSound(radius) {
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const bell = audioCtx.createBiquadFilter();
+
+  const toneVal = parseInt(toneSlider.value, 10);
+  const freq = toneVal >= 50
+    ? 220 + (800 - radius * 10) * (toneVal / 100)
+    : 120 + (400 - radius * 5) * (toneVal / 100);
+  const clampedFreq = Math.max(60, Math.min(1000, freq));
+
+  osc.type = toneVal > 50 ? 'sine' : 'triangle';
+  osc.frequency.setValueAtTime(clampedFreq, now);
+
+  const gainValue = radius > 70 ? 0.5 : 0.2;
+  gain.gain.setValueAtTime(gainValue, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 1);
+
+  bell.type = 'bandpass';
+  bell.frequency.setValueAtTime(clampedFreq * 2, now);
+  bell.Q.setValueAtTime(10, now);
+
+  osc.connect(bell);
+  bell.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start(now);
+  osc.stop(now + 1);
+}
+
+function checkCollisions() {
+  const now = performance.now();
+  const spring = parseFloat(springSlider.value);
+  const maxHits = parseInt(fragilitySlider.value, 10);
+  const fragilityEnabled = document.getElementById('fragilityToggle').checked;
+
+  for (let i = 0; i < circles.length; i++) {
+    const a = circles[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < circles.length; j++) {
+      const b = circles[j];
+      if (b.dead) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const distance = Math.hypot(dx, dy);
+      const sumRadii = a.radius + b.radius;
+      const minRadii = Math.abs(a.radius - b.radius);
+
+      if (distance >= minRadii && distance <= sumRadii) {
+        if (now - a.lastCollision > 300 && now - b.lastCollision > 300) {
+          a.growing = !a.growing;
+          b.growing = !b.growing;
+          a.lastCollision = now;
+          b.lastCollision = now;
+          a.collisions++;
+          b.collisions++;
+
+          if (fragilityEnabled) {
+            if (a.collisions >= maxHits) a.dead = true;
+            if (b.collisions >= maxHits) b.dead = true;
+          }
+
+          playSound((a.radius + b.radius) / 2);
+
+          if (physicsToggle.checked) {
+            const nx = dx / distance;
+            const ny = dy / distance;
+
+            const impactForce = Math.sqrt(a.radius + b.radius) * spring * 2;
+            const impulse = impactForce;
+            a.vx -= nx * impulse;
+            a.vy -= ny * impulse;
+            b.vx += nx * impulse;
+            b.vy += ny * impulse;
+          }
+        }
+      }
+    }
+  }
+}
+
+function animate() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let i = circles.length - 1; i >= 0; i--) {
+    const circle = circles[i];
+    circle.update();
+    circle.draw();
+    if (circle.dead && circle.alpha <= 0) {
+      circles.splice(i, 1);
+    }
+  }
+  checkCollisions();
+  requestAnimationFrame(animate);
+}
+
+let audioInitialized = false;
+canvas.addEventListener('click', async (e) => {
+  if (!audioInitialized) {
+    await audioCtx.resume();
+    audioInitialized = true;
+  }
+  circles.push(new Circle(e.clientX, e.clientY));
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  circles.length = 0;
+});
+
+animate();
+</script>
+</body>
+</html>
