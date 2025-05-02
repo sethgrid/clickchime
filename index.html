@@ -240,13 +240,26 @@ function animate() {
 }
 
 let audioInitialized = false;
-canvas.addEventListener('click', async (e) => {
+
+function initAudio() {
   if (!audioInitialized) {
-    await audioCtx.resume();
-    audioInitialized = true;
+    audioCtx.resume().then(() => {
+      audioInitialized = true;
+    });
   }
-  circles.push(new Circle(e.clientX, e.clientY));
-});
+}
+
+function handleInteraction(e) {
+  initAudio();
+  if (e.type === 'click' || e.type === 'touchstart') {
+    const x = e.clientX || (e.touches && e.touches[0].clientX);
+    const y = e.clientY || (e.touches && e.touches[0].clientY);
+    circles.push(new Circle(x, y));
+  }
+}
+
+canvas.addEventListener('click', handleInteraction);
+canvas.addEventListener('touchstart', handleInteraction);
 
 document.getElementById('clearBtn').addEventListener('click', () => {
   circles.length = 0;
